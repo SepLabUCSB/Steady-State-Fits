@@ -57,7 +57,9 @@ Run the program in the environment.
 
 An interactive Matplotlib window opens showing the current–time trace with detected step boundaries, midpoint markers, a drift-fit line, and allows users control to review fits, toggle filtering, or move to the next file.
 
-![App Screenshot](https://raw.githubusercontent.com/SepLabUCSB/Steady-State-Fits/trunk/docs/Fitting1.gif)
+![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting1.gif?raw=true)
+
+
 
 ## Folder Structure
 <img src="https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/folder_list.png" alt="Folder structure" width="80%">
