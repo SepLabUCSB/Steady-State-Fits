@@ -11,8 +11,23 @@ Clone the repo with GitHub.
 git clone https://github.com/SepLabUCSB/Steady-State-Fits
 ```
 
-## Usage/Examples
+## Usage
+Open main_simple.py in your favorite Python environment
 
+### Option 1: Run in Python IDE (e.g., Spyder)
+
+Open [`main_simple.py`](main_simple.py) in IDE and run the file.
+
+By default, the program uses:
+
+```python
+folder = Path("data")
+pattern = "*.txt"
+```
+
+This means it will process all `.txt` files in the `data/` folder.
+
+To analyze a different folder or file pattern in Spyder, change the default values in `build_parser()` inside [`main_simple.py`](main_simple.py).
 
 ## Main Entry Point
 The main analysis workflow is in [`main_simple.py`](main_simple.py).
@@ -22,6 +37,27 @@ The main analysis workflow is in [`main_simple.py`](main_simple.py).
 This script builds a command-line interface, prepares a [`PipelineConfig`](modules/config.py), and then calls [`analyze_folder()`](modules/analysis.py) to process all matching raw data files in the selected folder.
 
 The script is intentionally minimal. Most of the analysis logic is kept inside the [`modules/`](modules/) and [`interactive/`](interactive/) packages. This makes the command-line script easier to read and makes the analysis code easier to maintain.
+
+## Example
+
+Place raw chronoamperometry `.txt` files in the [`data/`](data/) folder.
+
+Example:
+
+```text
+data/
+├── trace_001.txt
+├── trace_002.txt
+└── trace_003.txt
+```
+
+By default, the program analyzes all `.txt` files in the `data/` folder.
+
+Run the program in the environment.
+
+An interactive Matplotlib window opens showing the current–time trace with detected step boundaries, midpoint markers, a drift-fit line, and allows users control to review fits, toggle filtering, or move to the next file.
+
+![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting1.gif)
 
 ## Folder Structure
 <img src="https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/folder_list.png" alt="Folder structure" width="80%">
@@ -86,39 +122,7 @@ matplotlib
 openpyxl
 ```
 
-## Input Data
-
-Place raw chronoamperometry `.txt` files in the [`data/`](data/) folder.
-
-Example:
-
-```text
-data/
-├── trace_001.txt
-├── trace_002.txt
-└── trace_003.txt
-```
-
-By default, the program analyzes all `.txt` files in the `data/` folder.
-
-## Usage
-
-The pipeline can be run from Python IDE, or the command line.
-
-### Option 1: Run in Python IDE (e.g., Spyder)
-
-Open [`main_simple.py`](main_simple.py) in IDE and run the file.
-
-By default, the program uses:
-
-```python
-folder = Path("data")
-pattern = "*.txt"
-```
-
-This means it will process all `.txt` files in the `data/` folder.
-
-To analyze a different folder or file pattern in Spyder, change the default values in `build_parser()` inside [`main_simple.py`](main_simple.py).
+## Alternate Usage
 
 ### Option 2: Run from the command line
 
