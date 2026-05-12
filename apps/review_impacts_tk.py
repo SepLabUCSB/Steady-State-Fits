@@ -41,5 +41,5 @@ def run_review_impacts_tk(folder: Path):
 
 if __name__ == "__main__":
     run_review_impacts_tk(
-        Path(r"Z:\Projects\Ishaan\Raw Data\4NP Nanoimpacts pH 4")
+        Path(r"")
     )
