@@ -91,7 +91,7 @@ An interactive fit-adjustment window lets users review each detected impact, adj
 This project uses both Python standard-library modules and external scientific Python packages.
 
 ### Standard-library packages
-`pathlib` is used to handle file and folder paths in a clean, operating-system-independent way.
+`pathlib` is used to handle file and folder paths in a clean, operating system independent way.
 In [`main_simple.py`](main_simple.py), the input folder is stored as a `Path` object:
 
 <img src="https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/pathlib.png" alt="Pathlib" width="80%">
