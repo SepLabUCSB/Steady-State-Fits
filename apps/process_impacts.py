@@ -13,13 +13,13 @@ from nanoimpact.analysis import analyze_folder
 
 def run_process_impacts():
     config = PipelineConfig(
-        folder=Path(r"Z:\Projects\Ishaan\Raw Data\4NP Nanoimpacts pH 4\Thiol + No Thiol Overlayed Histogram"),
+        folder=Path(r""),
         pattern="*.txt",
     )
 
     combined_df = analyze_folder(config)
 
-    out_xlsx = config.folder / "combined_results.xlsx"
+    out_xlsx = config.folder / ".xlsx"
     combined_df.to_excel(out_xlsx, index=False)
 
     print(f"Saved combined results to {out_xlsx}")
