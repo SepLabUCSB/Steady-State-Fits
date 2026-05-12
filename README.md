@@ -118,18 +118,6 @@ This should happen before importing modules that create plots.
 ## Scientific computing packages
 Listed in [`requirements.txt`](requirements.txt)
 
-## Installation
-
-Use a Python environment with the required packages installed:
-
-```text
-numpy
-scipy
-pandas
-matplotlib
-openpyxl
-```
-
 ## Alternate Usage
 
 ### Option 2: Run from the command line
