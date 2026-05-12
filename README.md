@@ -59,6 +59,10 @@ An interactive Matplotlib window opens showing the current–time trace with det
 
 ![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting1.gif?raw=true)
 
+Example current–time trace showing large periodic noise that can be removed using Fourier notch filtering, revealing the underlying step-like current response:
+
+![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting3.gif?raw=true)
+
 An interactive fit-adjustment window lets users review each detected impact, adjust pre/post fitting boundaries and evaluation time, then accept, reject, or save the fit to an excel file generated within the data folder.
 
 ![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting2.gif?raw=true)
