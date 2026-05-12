@@ -120,9 +120,8 @@ def detect_step_indices(
     default_noise_std_pa: float = 4.0,
 ):
     """
-    Detect negative nanoimpact steps using the legacy threshold logic.
-
-    Legacy threshold:
+    Detect negative nanoimpact steps using the following threshold logic:
+    
         noise_region = step_magnitude where |step_magnitude| < 20 pA
         noise_threshold = -3 * noise_std
         hard_min = -min_real_impact_pa
