@@ -1,9 +1,9 @@
 # Steady-State-Fits
 This repository contains a Python program designed to analyze steady state chronoamperometric traces obtained from nanoimpact electrochemistry.
 
-The program detects negative current impacts in chronoamperometry traces, fits local steady state plateaus before and after each impact, and calculates the current change, $\Delta i_{ss}$.
+The program detects current impacts in chronoamperometry traces, fits local steady-state plateaus before and after each impact to calculate the steady-state current change, $\Delta i_{ss}$, and optionally fits monoexponential relaxation after each impact to extract decay parameters such as $\tau$ and the decay rate constant.
 
-After automatic detection and fitting, the user can review impacts in an interactive Tk window, adjust fitting regions, keep or remove events, and export the final results to Excel.
+After automatic detection and fitting, the user can review impacts in an interactive Tk window, adjust fitting regions, keep or remove events, and export the final results to an Excel file.
 
 ## Installation
 Clone the repo with GitHub.
@@ -192,8 +192,8 @@ The pipeline performs the following steps:
 2. Detect candidate negative current impacts.
 3. Fit local steady state plateaus before and after each impact.
 4. Calculate Δi<sub>ss</sub>.
-5. Apply monoexponential correction when appropriate.
-6. Open the interactive Tk review window.
+5. Open the interactive Tk review window.
+6. Adjust linear and/or monoexponential fitting.
 7. Export accepted and removed impacts to Excel.
 
 ## Output Files
