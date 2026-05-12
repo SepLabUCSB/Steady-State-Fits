@@ -63,7 +63,7 @@ Example current–time trace showing large periodic noise that can be removed us
 
 ![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting3.gif?raw=true)
 
-An interactive fit-adjustment window lets users review each detected impact, adjust pre/post fitting boundaries and evaluation time, then accept, reject, or save the fit to an excel file generated within the data folder.
+An interactive fit-adjustment window lets users review each detected impact, adjust pre/post fitting boundaries and evaluation time, then accept, or reject, and save the fit to an excel file generated within the data folder.
 
 ![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting2.gif?raw=true)
 
