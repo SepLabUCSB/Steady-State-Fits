@@ -59,7 +59,9 @@ An interactive Matplotlib window opens showing the current–time trace with det
 
 ![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting1.gif?raw=true)
 
+An interactive fit-adjustment window lets users review each detected impact, adjust pre/post fitting boundaries and evaluation time, then accept, reject, or save the fit to an excel file generated within the data folder.
 
+![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting2.gif?raw=true)
 
 ## Folder Structure
 <img src="https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/folder_list.png" alt="Folder structure" width="80%">
