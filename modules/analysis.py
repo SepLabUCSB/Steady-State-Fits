@@ -89,7 +89,7 @@ def _save_combined_workbook_safely(
 
 def _autosave_combined_rows(rows, monoexp_rows, out_xlsx: Path, verbose: bool = True):
     """
-    Live-save combined rows after each Tk-reviewed file.
+    Save combined rows in real time after each Tk-reviewed file.
 
     This overwrites combined_results.xlsx with all rows processed so far.
     That avoids duplicate appends while still protecting progress during
