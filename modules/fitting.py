@@ -98,6 +98,25 @@ def fit_monoexp_step(
         predicted_current_pa=predicted_current_pa,
     )
 
+def _matches_impact_polarity(delta_i_pa: float, impact_polarity: str) -> bool:
+    if not np.isfinite(delta_i_pa):
+        return False
+
+    impact_polarity = str(impact_polarity).strip().lower()
+
+    if impact_polarity == "negative":
+        return delta_i_pa < 0
+
+    if impact_polarity == "positive":
+        return delta_i_pa > 0
+
+    if impact_polarity == "both":
+        return delta_i_pa != 0
+
+    raise ValueError(
+        f"Unknown impact_polarity '{impact_polarity}'. "
+        "Use 'negative', 'positive', or 'both'."
+    )
 
 def fit_monoexp_for_negative_steps(
     time_s: np.ndarray,
@@ -109,9 +128,13 @@ def fit_monoexp_for_negative_steps(
     min_plateau_pts: int = 200,
     pre_step_window_sec: float = 0.2,
     verbose: bool = True,
+    impact_polarity: str = "negative",
 ) -> StepFitArrays:
     """
     Fit monoexponential relaxations after negative impact steps.
+
+    This mirrors the fitting section from your original analyze_single_file()
+    function but keeps the fitting logic separate from analysis orchestration.
     """
     time_s = np.asarray(time_s, dtype=float)
     current_pa = np.asarray(current_pa, dtype=float)
@@ -146,12 +169,12 @@ def fit_monoexp_for_negative_steps(
     dt_s = float(np.median(np.diff(time_s)))
 
     if verbose:
-        print("  Performing monoexponential fits for negative steps...")
+        print(f"  Performing monoexponential fits for {impact_polarity} steps...")
 
     for plateau_idx in range(1, n_plateaus):
         delta_i_pa = delta_i_raw_pa[plateau_idx]
 
-        if not np.isfinite(delta_i_pa) or delta_i_pa >= 0:
+        if not _matches_impact_polarity(delta_i_pa, impact_polarity):
             continue
 
         if plateau_idx >= len(step_indices):

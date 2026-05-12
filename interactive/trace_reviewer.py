@@ -40,6 +40,15 @@ class ReviewTracePayload:
     drift_slope_pa_per_min: float
     drift_intercept_pa: float
     out_png: Path | None = None
+    
+@dataclass
+class ReviewTraceResult:
+    keep_plateau: np.ndarray
+    exp_tau_s: np.ndarray
+    exp_amplitude_pa: np.ndarray
+    exp_i_inf_pa: np.ndarray
+    exp_r_squared: np.ndarray
+    monoexp_user_selected: np.ndarray
 
 
 def _midpoint_colors(delta_i_final_pa):
@@ -96,13 +105,15 @@ def review_trace(payload: ReviewTracePayload):
     i_ss_final_pa = np.asarray(payload.i_ss_final_pa, dtype=float)
     delta_i_final_pa = np.asarray(payload.delta_i_final_pa, dtype=float)
 
-    exp_tau_s = np.asarray(payload.exp_tau_s, dtype=float)
-    exp_amplitude_pa = np.asarray(payload.exp_amplitude_pa, dtype=float)
-    exp_i_inf_pa = np.asarray(payload.exp_i_inf_pa, dtype=float)
-    exp_r_squared = np.asarray(payload.exp_r_squared, dtype=float)
+    exp_tau_s = np.asarray(payload.exp_tau_s, dtype=float).copy()
+    exp_amplitude_pa = np.asarray(payload.exp_amplitude_pa, dtype=float).copy()
+    exp_i_inf_pa = np.asarray(payload.exp_i_inf_pa, dtype=float).copy()
+    exp_r_squared = np.asarray(payload.exp_r_squared, dtype=float).copy()
 
     n_plateaus = len(i_ss_final_pa)
     keep_plateau = np.ones(n_plateaus, dtype=bool)
+
+    monoexp_user_selected = np.zeros(n_plateaus, dtype=bool)
 
     if payload.out_png is None:
         out_png = path.with_name(path.stem + "_trace.png")
@@ -271,6 +282,12 @@ def review_trace(payload: ReviewTracePayload):
                         "exp_r_squared": float(exp_r_squared[plateau_idx])
                         if plateau_idx < len(exp_r_squared)
                         else np.nan,
+                        
+                        "monoexp_user_selected": bool(
+                            monoexp_user_selected[plateau_idx]
+                        ),
+                        "fit_mode": "linear",
+                        
                         "keep_for_stats": bool(keep_plateau[plateau_idx]),
                         "review_status": "unreviewed",
                     }
@@ -347,7 +364,31 @@ def review_trace(payload: ReviewTracePayload):
                     payload.delta_i_final_pa[update_idx] = reviewed_slice[valid]
                 except Exception:
                     pass
-        
+            # Update monoexponential values returned by the fit adjuster.
+            if "exp_tau_s" in reviewed_impacts_df.columns:
+                values = reviewed_impacts_df["exp_tau_s"].to_numpy(dtype=float)
+                n_update = min(len(values), len(exp_tau_s))
+                exp_tau_s[:n_update] = values[:n_update]
+
+            if "exp_amplitude_pa" in reviewed_impacts_df.columns:
+                values = reviewed_impacts_df["exp_amplitude_pa"].to_numpy(dtype=float)
+                n_update = min(len(values), len(exp_amplitude_pa))
+                exp_amplitude_pa[:n_update] = values[:n_update]
+
+            if "exp_i_inf_pa" in reviewed_impacts_df.columns:
+                values = reviewed_impacts_df["exp_i_inf_pa"].to_numpy(dtype=float)
+                n_update = min(len(values), len(exp_i_inf_pa))
+                exp_i_inf_pa[:n_update] = values[:n_update]
+
+            if "exp_r_squared" in reviewed_impacts_df.columns:
+                values = reviewed_impacts_df["exp_r_squared"].to_numpy(dtype=float)
+                n_update = min(len(values), len(exp_r_squared))
+                exp_r_squared[:n_update] = values[:n_update]
+
+            if "monoexp_user_selected" in reviewed_impacts_df.columns:
+                values = reviewed_impacts_df["monoexp_user_selected"].to_numpy(dtype=bool)
+                n_update = min(len(values), len(monoexp_user_selected))
+                monoexp_user_selected[:n_update] = values[:n_update]
             refresh_keep_colors()
             fig.canvas.draw_idle()
         
@@ -597,4 +638,11 @@ def review_trace(payload: ReviewTracePayload):
         show_blocking_safely(fig)
 
     
-    return keep_plateau
+    return ReviewTraceResult(
+        keep_plateau=np.asarray(keep_plateau, dtype=bool),
+        exp_tau_s=np.asarray(exp_tau_s, dtype=float),
+        exp_amplitude_pa=np.asarray(exp_amplitude_pa, dtype=float),
+        exp_i_inf_pa=np.asarray(exp_i_inf_pa, dtype=float),
+        exp_r_squared=np.asarray(exp_r_squared, dtype=float),
+        monoexp_user_selected=np.asarray(monoexp_user_selected, dtype=bool),
+    )

@@ -20,7 +20,6 @@ from modules.fitting import fit_monoexp_for_negative_steps
 from modules.step_analysis import (
     extract_plateaus,
     calculate_raw_delta_i,
-    apply_monoexp_overrides,
     calculate_global_drift,
     build_plateau_results_table,
 )
@@ -30,6 +29,25 @@ from modules.reviewed_fits import apply_reviewed_fits_to_results
 def _empty_impact_arrays():
     return np.array([], dtype=float), np.array([], dtype=float)
 
+def _delta_matches_polarity_array(delta_i_pa: np.ndarray, impact_polarity: str):
+    delta_i_pa = np.asarray(delta_i_pa, dtype=float)
+    finite = np.isfinite(delta_i_pa)
+
+    impact_polarity = str(impact_polarity).strip().lower()
+
+    if impact_polarity == "negative":
+        return finite & (delta_i_pa < 0)
+
+    if impact_polarity == "positive":
+        return finite & (delta_i_pa > 0)
+
+    if impact_polarity == "both":
+        return finite & (delta_i_pa != 0)
+
+    raise ValueError(
+        f"Unknown impact_polarity '{impact_polarity}'. "
+        "Use 'negative', 'positive', or 'both'."
+    )
 
 def _save_excel_safely(df: pd.DataFrame, out_path: Path):
     out_path = Path(out_path)
@@ -43,8 +61,33 @@ def _save_excel_safely(df: pd.DataFrame, out_path: Path):
             "Close the file in Excel and run again."
         )
 
+def _save_combined_workbook_safely(
+    results_df: pd.DataFrame,
+    monoexp_df: pd.DataFrame,
+    out_path: Path,
+):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-def _autosave_combined_rows(rows, out_xlsx: Path, verbose: bool = True):
+    try:
+        with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+            results_df.to_excel(writer, sheet_name="results", index=False)
+
+            if monoexp_df is not None and not monoexp_df.empty:
+                monoexp_df.to_excel(
+                    writer,
+                    sheet_name="monoexponential",
+                    index=False,
+                )
+
+    except PermissionError:
+        raise PermissionError(
+            f"Could not write {out_path}. "
+            "Close the file in Excel and run again."
+        )
+
+
+def _autosave_combined_rows(rows, monoexp_rows, out_xlsx: Path, verbose: bool = True):
     """
     Live-save combined rows after each Tk-reviewed file.
 
@@ -56,10 +99,25 @@ def _autosave_combined_rows(rows, out_xlsx: Path, verbose: bool = True):
         return
 
     combined_df = pd.DataFrame(rows)
-    _save_excel_safely(combined_df, out_xlsx)
+    
+    combined_monoexp_df = (
+        pd.DataFrame(monoexp_rows)
+        if monoexp_rows is not None and len(monoexp_rows) > 0
+        else pd.DataFrame()
+    )
 
+    _save_combined_workbook_safely(
+        results_df=combined_df,
+        monoexp_df=combined_monoexp_df,
+        out_path=out_xlsx,
+    )
+    
     if verbose:
-        print(f"  [autosave] Updated {out_xlsx.name} ({len(combined_df)} rows total)")
+       print(
+           f"  [autosave] Updated {out_xlsx.name} "
+           f"({len(combined_df)} result rows, "
+           f"{len(combined_monoexp_df)} monoexp rows)"
+       )
 
 
 def _ensure_keep_for_stats(per_file_df: pd.DataFrame):
@@ -113,15 +171,25 @@ def _save_kept_removed_tables(
 def split_small_large_impacts(
     per_file_df: pd.DataFrame,
     small_impact_min_pa: float = -100.0,
+    impact_polarity: str = "negative",
 ):
     """
-    Split negative impacts into small/medium and large groups.
+    Split selected impacts into small/medium and large groups using |Δi|.
+
+    negative:
+        Δi < 0
+
+    positive:
+        Δi > 0
+
+    both:
+        Δi != 0
 
     small/medium:
-        small_impact_min_pa <= Δi < 0
+        |Δi| <= |small_impact_min_pa|
 
     large:
-        Δi < small_impact_min_pa
+        |Δi| > |small_impact_min_pa|
     """
     if per_file_df is None or per_file_df.empty:
         return _empty_impact_arrays()
@@ -134,21 +202,21 @@ def split_small_large_impacts(
     if "keep_for_stats" in df.columns:
         df = df[df["keep_for_stats"].astype(bool)]
 
-    negative_df = df[df["delta_i_from_prev_pA"] < 0].copy()
+    delta = df["delta_i_from_prev_pA"].to_numpy(dtype=float)
+    selected_mask = _delta_matches_polarity_array(delta, impact_polarity)
 
-    small_df = negative_df[
-        negative_df["delta_i_from_prev_pA"] >= small_impact_min_pa
-    ]
+    selected_df = df[selected_mask].copy()
 
-    large_df = negative_df[
-        negative_df["delta_i_from_prev_pA"] < small_impact_min_pa
-    ]
+    threshold_abs_pa = abs(float(small_impact_min_pa))
+    abs_delta = selected_df["delta_i_from_prev_pA"].abs()
+
+    small_df = selected_df[abs_delta <= threshold_abs_pa]
+    large_df = selected_df[abs_delta > threshold_abs_pa]
 
     small_impacts_pa = small_df["delta_i_from_prev_pA"].to_numpy(dtype=float)
     large_impacts_pa = large_df["delta_i_from_prev_pA"].to_numpy(dtype=float)
 
     return small_impacts_pa, large_impacts_pa
-
 
 def _apply_notch_filter_if_requested(
     current_raw_pa: np.ndarray,
@@ -189,7 +257,8 @@ def _run_interactive_review(
     current_pa: np.ndarray,
     step_indices,
     plateau_result,
-    delta_result,
+    i_ss_final_pa: np.ndarray,
+    delta_i_final_pa: np.ndarray,
     step_fit_arrays,
     drift_slope_pa_per_min: float,
     drift_intercept_pa: float,
@@ -213,8 +282,8 @@ def _run_interactive_review(
         current_filtered_pa=current_pa,
         step_indices=step_indices,
         i_ss_idx=plateau_result.i_ss_idx,
-        i_ss_final_pa=delta_result.i_ss_final_pa,
-        delta_i_final_pa=delta_result.delta_i_final_pa,
+        i_ss_final_pa=i_ss_final_pa,
+        delta_i_final_pa=delta_i_final_pa,
         exp_tau_s=step_fit_arrays.exp_tau_s,
         exp_amplitude_pa=step_fit_arrays.exp_amplitude_pa,
         exp_i_inf_pa=step_fit_arrays.exp_i_inf_pa,
@@ -228,9 +297,7 @@ def _run_interactive_review(
         out_png=path.with_name(path.stem + "_trace.png"),
     )
 
-    keep_plateau = review_trace(payload)
-
-    return np.asarray(keep_plateau, dtype=bool)
+    return review_trace(payload)
 
 
 def _build_not_enough_plateaus_table(
@@ -277,6 +344,48 @@ def _build_not_enough_plateaus_table(
 
     return _ensure_keep_for_stats(per_file_df)
 
+def _build_monoexp_results_table(
+    file_name: str,
+    time_min: np.ndarray,
+    plateau_result,
+    delta_i_linear_pa: np.ndarray,
+    keep_plateau: np.ndarray,
+    step_fit_arrays,
+    monoexp_user_selected: np.ndarray | None = None,
+):
+    n_plateaus = len(plateau_result.i_ss_geom_pa)
+
+    exp_tau_s = np.asarray(step_fit_arrays.exp_tau_s, dtype=float)
+    exp_amplitude_pa = np.asarray(step_fit_arrays.exp_amplitude_pa, dtype=float)
+    exp_i_inf_pa = np.asarray(step_fit_arrays.exp_i_inf_pa, dtype=float)
+    exp_r_squared = np.asarray(step_fit_arrays.exp_r_squared, dtype=float)
+    monoexp_decay_rate_constant_s_inv = np.full(n_plateaus, np.nan)
+
+    valid_tau = np.isfinite(exp_tau_s) & (exp_tau_s > 0)
+    monoexp_decay_rate_constant_s_inv[valid_tau] = 1.0 / exp_tau_s[valid_tau]
+    
+    if monoexp_user_selected is None:
+        monoexp_user_selected = np.zeros(n_plateaus, dtype=bool)
+    else:
+        monoexp_user_selected = np.asarray(monoexp_user_selected, dtype=bool)
+
+    return pd.DataFrame(
+        {
+            "file_name": file_name,
+            "plateau_index": np.arange(n_plateaus),
+            "time_min": time_min[plateau_result.i_ss_idx],
+    
+            "monoexp_user_selected": monoexp_user_selected,
+            "monoexp_i_inf_pA": exp_i_inf_pa,
+            "monoexp_amplitude_pA": exp_amplitude_pa,
+            "monoexp_tau_s": exp_tau_s,
+            "monoexp_decay_rate_constant_s_inv": monoexp_decay_rate_constant_s_inv,
+            "monoexp_r_squared": exp_r_squared,
+    
+            "keep_for_stats": keep_plateau,
+        }
+    )
+
 
 def analyze_single_file(
     path,
@@ -284,6 +393,7 @@ def analyze_single_file(
     save_per_file: bool = True,
     verbose: bool = True,
     review_interactive: bool = False,
+    impact_polarity: str = "negative",
 ):
     """
     Analyze one raw nanoimpact .txt file.
@@ -301,6 +411,7 @@ def analyze_single_file(
         In interactive mode, removed plateaus are excluded from this returned table.
     """
     path = Path(path)
+    empty_monoexp_df = pd.DataFrame()
 
     if verbose:
         print(f"\n=== Processing file: {path.name} ===")
@@ -346,6 +457,7 @@ def analyze_single_file(
         charging_cutoff_min=config.detection.charging_cutoff_min,
         cluster_gap_sec=config.detection.cluster_gap_sec,
         min_real_impact_pa=config.detection.min_real_impact_pa,
+        impact_polarity=impact_polarity,
     )
 
     step_indices = detection_result.step_indices
@@ -362,7 +474,7 @@ def analyze_single_file(
         if verbose:
             print("  No candidates found.")
 
-        return np.array([]), np.array([]), None
+        return np.array([]), np.array([]), None, empty_monoexp_df
 
     # -----------------------------
     # Plateau extraction
@@ -380,7 +492,7 @@ def analyze_single_file(
         print(f"  Plateaus accepted: {n_plateaus}")
 
     if n_plateaus == 0:
-        return np.array([]), np.array([]), None
+        return np.array([]), np.array([]), None, empty_monoexp_df
 
     # -----------------------------
     # Single-plateau / not-enough-plateaus case
@@ -412,7 +524,7 @@ def analyze_single_file(
             if review_interactive:
                 _save_kept_removed_tables(per_file_df, path, verbose=verbose)
 
-        return np.array([]), np.array([]), per_file_df
+        return np.array([]), np.array([]), per_file_df, empty_monoexp_df
 
     # -----------------------------
     # Raw Δi calculation
@@ -435,20 +547,17 @@ def analyze_single_file(
         min_plateau_pts=config.detection.min_plateau_pts,
         pre_step_window_sec=0.2,
         verbose=verbose,
+        impact_polarity=impact_polarity,
     )
 
     # -----------------------------
-    # Apply monoexponential overrides
+    # Linear / plateau values
     # -----------------------------
-    delta_result = apply_monoexp_overrides(
-        i_ss_geom_pa=plateau_result.i_ss_geom_pa,
-        delta_i_raw_pa=delta_i_raw_pa,
-        exp_i_inf_pa=step_fit_arrays.exp_i_inf_pa,
-        exp_amplitude_pa=step_fit_arrays.exp_amplitude_pa,
-        exp_r_squared=step_fit_arrays.exp_r_squared,
-        r_squared_threshold=config.fit.monoexp_r2_threshold,
-        min_real_impact_pa=config.detection.min_real_impact_pa,
-    )
+    # Monoexponential fits are saved separately in the combined workbook's
+    # "monoexponential" sheet. They do not overwrite the main results sheet.
+    i_ss_linear_pa = plateau_result.i_ss_geom_pa.copy()
+    delta_i_linear_pa = delta_i_raw_pa.copy()
+    used_exp_fit_for_delta = np.full(n_plateaus, False, dtype=bool)
 
     # -----------------------------
     # Drift
@@ -456,7 +565,7 @@ def analyze_single_file(
     drift_slope_pa_per_min, drift_intercept_pa = calculate_global_drift(
         time_min=time_min,
         i_ss_idx=plateau_result.i_ss_idx,
-        i_ss_final_pa=delta_result.i_ss_final_pa,
+        i_ss_final_pa=i_ss_linear_pa,
     )
 
     if verbose and np.isfinite(drift_slope_pa_per_min):
@@ -466,9 +575,9 @@ def analyze_single_file(
     # Interactive review
     # -----------------------------
     keep_plateau = np.ones(n_plateaus, dtype=bool)
-
+    monoexp_user_selected = np.zeros(n_plateaus, dtype=bool)
     if review_interactive:
-        keep_plateau = _run_interactive_review(
+        review_result = _run_interactive_review(
             path=path,
             time_s=time_s,
             time_min=time_min,
@@ -476,11 +585,24 @@ def analyze_single_file(
             current_pa=current_pa,
             step_indices=step_indices,
             plateau_result=plateau_result,
-            delta_result=delta_result,
+            i_ss_final_pa=i_ss_linear_pa,
+            delta_i_final_pa=delta_i_linear_pa,
             step_fit_arrays=step_fit_arrays,
             drift_slope_pa_per_min=drift_slope_pa_per_min,
             drift_intercept_pa=drift_intercept_pa,
             config=config,
+        )
+
+        keep_plateau = np.asarray(review_result.keep_plateau, dtype=bool)
+    
+        step_fit_arrays.exp_tau_s[:] = review_result.exp_tau_s
+        step_fit_arrays.exp_amplitude_pa[:] = review_result.exp_amplitude_pa
+        step_fit_arrays.exp_i_inf_pa[:] = review_result.exp_i_inf_pa
+        step_fit_arrays.exp_r_squared[:] = review_result.exp_r_squared
+    
+        monoexp_user_selected = np.asarray(
+            review_result.monoexp_user_selected,
+            dtype=bool,
         )
 
     if keep_plateau.size != n_plateaus:
@@ -489,8 +611,10 @@ def analyze_single_file(
             f"but there are {n_plateaus} plateaus."
         )
 
-    delta_i_final_pa = delta_result.delta_i_final_pa.copy()
+    delta_i_final_pa = delta_i_linear_pa.copy()
     delta_i_final_pa[~keep_plateau] = np.nan
+
+    used_exp_fit_for_delta = np.full(n_plateaus, False, dtype=bool)
 
     # -----------------------------
     # Build output table
@@ -500,14 +624,14 @@ def analyze_single_file(
         time_min=time_min,
         i_ss_idx=plateau_result.i_ss_idx,
         i_ss_geom_pa=plateau_result.i_ss_geom_pa,
-        i_ss_final_pa=delta_result.i_ss_final_pa,
-        delta_i_raw_pa=delta_result.delta_i_raw_pa,
+        i_ss_final_pa=i_ss_linear_pa,
+        delta_i_raw_pa=delta_i_linear_pa,
         delta_i_final_pa=delta_i_final_pa,
         exp_tau_s=step_fit_arrays.exp_tau_s,
         exp_amplitude_pa=step_fit_arrays.exp_amplitude_pa,
         exp_i_inf_pa=step_fit_arrays.exp_i_inf_pa,
         exp_r_squared=step_fit_arrays.exp_r_squared,
-        used_exp_fit_for_delta=delta_result.used_exp_fit_for_delta,
+        used_exp_fit_for_delta=used_exp_fit_for_delta,
         keep_plateau=keep_plateau,
     )
 
@@ -548,6 +672,24 @@ def analyze_single_file(
         per_file_keep_df = per_file_df[
             per_file_df["keep_for_stats"].astype(bool)
         ].copy()
+        
+    # -----------------------------
+    # Build monoexponential table for combined_results.xlsx
+    # -----------------------------
+    monoexp_df = _build_monoexp_results_table(
+        file_name=path.name,
+        time_min=time_min,
+        plateau_result=plateau_result,
+        delta_i_linear_pa=delta_i_raw_pa,
+        keep_plateau=keep_plateau,
+        step_fit_arrays=step_fit_arrays,
+        monoexp_user_selected=monoexp_user_selected,
+    )
+
+    monoexp_keep_df = monoexp_df[
+    monoexp_df["keep_for_stats"].astype(bool)
+    & monoexp_df["monoexp_user_selected"].astype(bool)
+    ].copy()
 
     # -----------------------------
     # Split impacts for summary
@@ -555,23 +697,24 @@ def analyze_single_file(
     small_impacts_pa, large_impacts_pa = split_small_large_impacts(
         per_file_df=per_file_keep_df,
         small_impact_min_pa=config.detection.small_impact_min_pa,
+        impact_polarity=impact_polarity,
     )
 
     if verbose:
-        negative_values = per_file_keep_df["delta_i_from_prev_pA"].to_numpy(dtype=float)
-        negative_values = negative_values[np.isfinite(negative_values)]
-        negative_values = negative_values[negative_values < 0]
-        abs_values = np.abs(negative_values)
+        values = per_file_keep_df["delta_i_from_prev_pA"].to_numpy(dtype=float)
+        selected_mask = _delta_matches_polarity_array(values, impact_polarity)
+        values = values[selected_mask]
+        abs_values = np.abs(values)
 
         count_0_40 = int(np.sum((abs_values >= 0) & (abs_values < 40)))
         count_40_100 = int(np.sum((abs_values >= 40) & (abs_values <= 100)))
         count_gt_100 = int(np.sum(abs_values > 100))
 
-        print(f"  Impacts 0–40 pA:   {count_0_40}")
-        print(f"  Impacts 40–100 pA: {count_40_100}")
-        print(f"  Impacts >100 pA:   {count_gt_100}")
+        print(f"  {impact_polarity} impacts 0–40 pA:   {count_0_40}")
+        print(f"  {impact_polarity} impacts 40–100 pA: {count_40_100}")
+        print(f"  {impact_polarity} impacts >100 pA:   {count_gt_100}")
 
-    return small_impacts_pa, large_impacts_pa, per_file_keep_df
+    return small_impacts_pa, large_impacts_pa, per_file_keep_df, monoexp_keep_df
 
 
 def analyze_folder(
@@ -582,6 +725,7 @@ def analyze_folder(
     verbose: bool = True,
     review_interactive: bool = False,
     live_autosave: bool | None = None,
+    impact_polarity: str = "negative",
 ) -> pd.DataFrame:
     """
     Analyze all raw nanoimpact files in a folder.
@@ -604,14 +748,16 @@ def analyze_folder(
     combined_rows = []
     all_small_impacts = []
     all_large_impacts = []
+    combined_monoexp_rows = []
 
     for path in paths:
-        small_impacts_pa, large_impacts_pa, per_file_keep_df = analyze_single_file(
+        small_impacts_pa, large_impacts_pa, per_file_keep_df, monoexp_keep_df = analyze_single_file(
             path=path,
             config=config,
             save_per_file=save_per_file,
             verbose=verbose,
             review_interactive=review_interactive,
+            impact_polarity=impact_polarity,
         )
 
         if small_impacts_pa is not None and len(small_impacts_pa) > 0:
@@ -622,13 +768,17 @@ def analyze_folder(
 
         if per_file_keep_df is not None and not per_file_keep_df.empty:
             combined_rows.extend(per_file_keep_df.to_dict("records"))
+        
+        if monoexp_keep_df is not None and not monoexp_keep_df.empty:
+            combined_monoexp_rows.extend(monoexp_keep_df.to_dict("records"))
 
-            if save_combined and live_autosave and len(combined_rows) > 0:
-                _autosave_combined_rows(
-                    rows=combined_rows,
-                    out_xlsx=out_combined,
-                    verbose=verbose,
-                )
+        if save_combined and live_autosave and len(combined_rows) > 0:
+            _autosave_combined_rows(
+                rows=combined_rows,
+                monoexp_rows=combined_monoexp_rows,
+                out_xlsx=out_combined,
+                verbose=verbose,
+            )
 
     if len(combined_rows) == 0:
         if verbose:
@@ -638,41 +788,57 @@ def analyze_folder(
 
     combined_df = pd.DataFrame(combined_rows)
     combined_df = _ensure_keep_for_stats(combined_df)
+    combined_monoexp_df = (
+        pd.DataFrame(combined_monoexp_rows)
+        if len(combined_monoexp_rows) > 0
+        else pd.DataFrame()
+    )
 
     if save_combined:
-        _save_excel_safely(combined_df, out_combined)
+        _save_combined_workbook_safely(
+            results_df=combined_df,
+            monoexp_df=combined_monoexp_df,
+            out_path=out_combined,
+        )
 
         if verbose:
             print(f"\nCombined KEPT plateau results saved to {out_combined}")
 
     if save_split_files and "delta_i_from_prev_pA" in combined_df.columns:
-        negative_df = combined_df[combined_df["delta_i_from_prev_pA"] < 0].copy()
+        selected_df = combined_df.copy()
 
-        if "keep_for_stats" in negative_df.columns:
-            negative_df = negative_df[negative_df["keep_for_stats"].astype(bool)]
+    if "keep_for_stats" in selected_df.columns:
+        selected_df = selected_df[selected_df["keep_for_stats"].astype(bool)]
 
-        small_df = negative_df[
-            negative_df["delta_i_from_prev_pA"] >= config.detection.small_impact_min_pa
-        ]
+    delta = selected_df["delta_i_from_prev_pA"].to_numpy(dtype=float)
+    selected_mask = _delta_matches_polarity_array(delta, impact_polarity)
+    selected_df = selected_df[selected_mask].copy()
 
-        large_df = negative_df[
-            negative_df["delta_i_from_prev_pA"] < config.detection.small_impact_min_pa
-        ]
+    threshold_abs_pa = abs(float(config.detection.small_impact_min_pa))
+    abs_delta = selected_df["delta_i_from_prev_pA"].abs()
 
+    small_df = selected_df[abs_delta <= threshold_abs_pa]
+    large_df = selected_df[abs_delta > threshold_abs_pa]
+
+    if impact_polarity == "negative":
         out_small = Path(config.folder) / "combined_small_impacts.xlsx"
         out_large = Path(config.folder) / "combined_large_impacts.xlsx"
+    else:
+        out_small = Path(config.folder) / f"combined_{impact_polarity}_small_impacts.xlsx"
+        out_large = Path(config.folder) / f"combined_{impact_polarity}_large_impacts.xlsx"
 
-        _save_excel_safely(small_df, out_small)
-        _save_excel_safely(large_df, out_large)
+    _save_excel_safely(small_df, out_small)
+    _save_excel_safely(large_df, out_large)
 
-        if verbose:
-            print(f"Small impacts saved to {out_small}")
-            print(f"Large impacts saved to {out_large}")
+    if verbose:
+        print(f"Small {impact_polarity} impacts saved to {out_small}")
+        print(f"Large {impact_polarity} impacts saved to {out_large}")
 
     if verbose:
         print_impact_summary(
             all_small_impacts=all_small_impacts,
             all_large_impacts=all_large_impacts,
+            impact_polarity=impact_polarity,
         )
 
     return combined_df
@@ -681,6 +847,7 @@ def analyze_folder(
 def print_impact_summary(
     all_small_impacts: list[np.ndarray],
     all_large_impacts: list[np.ndarray],
+    impact_polarity: str = "negative",
 ):
     """
     Print simple summary statistics across all files.
@@ -698,7 +865,7 @@ def print_impact_summary(
     all_impacts_pa = np.concatenate([small_impacts_pa, large_impacts_pa])
 
     if all_impacts_pa.size == 0:
-        print("\nNo negative impacts detected in any file.")
+        print(f"\nNo {impact_polarity} impacts detected in any file.")
         return
 
     all_abs_pa = np.abs(all_impacts_pa)
@@ -707,8 +874,8 @@ def print_impact_summary(
     count_40_100 = int(np.sum((all_abs_pa >= 40) & (all_abs_pa <= 100)))
     count_gt_100 = int(np.sum(all_abs_pa > 100))
 
-    print("\nImpact summary across all files:")
-    print(f"  Total negative impacts: {all_abs_pa.size}")
+    print(f"\nImpact summary across all files ({impact_polarity}):")
+    print(f"  Total selected impacts: {all_abs_pa.size}")
     print(f"  0–40 pA: {count_0_40}")
     print(f"  40–100 pA: {count_40_100}")
     print(f"  >100 pA: {count_gt_100}")

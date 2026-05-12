@@ -14,7 +14,7 @@ import pandas as pd
 from matplotlib.figure import Figure
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-
+from modules.fitting import fit_monoexp_step
 
 def open_impact_fit_adjuster(
     parent,
@@ -80,6 +80,7 @@ class ImpactFitAdjuster:
         self.on_update = on_update
         self.current_index = 0
         self.mode = tk.StringVar(value="pre_start")
+        self.fit_mode = tk.StringVar(value="linear")
         self.status_var = tk.StringVar()
         self.fit_info_var = tk.StringVar()
 
@@ -95,6 +96,7 @@ class ImpactFitAdjuster:
             )
 
         self._ensure_review_columns()
+        self._normalize_fit_modes()
         self._initialize_default_windows()
 
         self.window.protocol("WM_DELETE_WINDOW", self.close_window)
@@ -125,11 +127,46 @@ class ImpactFitAdjuster:
             "review_delta_i_pA": np.nan,
             "review_pre_value_pA": np.nan,
             "review_post_value_pA": np.nan,
+            
+            "fit_mode": "linear",
+            "monoexp_user_selected": False,
+            "monoexp_delta_i_pA": np.nan,
+            
+            "review_exp_start_s": np.nan,
+            "review_exp_end_s": np.nan,
+            "review_exp_tau_s": np.nan,
+            "review_exp_amplitude_pa": np.nan,
+            "review_exp_i_inf_pa": np.nan,
+            "review_exp_r_squared": np.nan,
         }
 
         for col, default in defaults.items():
             if col not in self.impacts_df.columns:
                 self.impacts_df[col] = default
+                
+    def _normalize_fit_modes(self):
+        if "fit_mode" not in self.impacts_df.columns:
+            self.impacts_df["fit_mode"] = "linear"
+
+        self.impacts_df["fit_mode"] = (
+            self.impacts_df["fit_mode"]
+            .fillna("linear")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+        bad_mask = ~self.impacts_df["fit_mode"].isin(["linear", "monoexp"])
+        self.impacts_df.loc[bad_mask, "fit_mode"] = "linear"
+
+        if "monoexp_user_selected" not in self.impacts_df.columns:
+            self.impacts_df["monoexp_user_selected"] = False
+
+        self.impacts_df["monoexp_user_selected"] = (
+            self.impacts_df["monoexp_user_selected"]
+            .fillna(False)
+            .astype(bool)
+        )
     
     def _update_final_delta_columns(self):
         """
@@ -268,6 +305,15 @@ class ImpactFitAdjuster:
 
             if not np.isfinite(self.impacts_df.loc[idx, "review_eval_time_s"]):
                 self.impacts_df.loc[idx, "review_eval_time_s"] = eval_time_s
+            
+            exp_start_s = impact_time_s
+            exp_end_s = min(trace_end, impact_time_s + 20.0)
+            
+            if not np.isfinite(self.impacts_df.loc[idx, "review_exp_start_s"]):
+                self.impacts_df.loc[idx, "review_exp_start_s"] = exp_start_s
+            
+            if not np.isfinite(self.impacts_df.loc[idx, "review_exp_end_s"]):
+                self.impacts_df.loc[idx, "review_exp_end_s"] = exp_end_s
 
         for idx in self.impacts_df.index:
             self._refit_row(idx)
@@ -323,6 +369,12 @@ class ImpactFitAdjuster:
             text="Close",
             command=self.close_window,
         ).pack(side="left", padx=3)
+        self.fit_mode_button = ttk.Button(
+            control_frame,
+            text="Use monoexp",
+            command=self.toggle_fit_mode,
+        )
+        self.fit_mode_button.pack(side="left", padx=3)
 
         mode_frame = ttk.LabelFrame(main_frame, text="Click mode: choose boundary, then click on trace")
         mode_frame.pack(side="top", fill="x", padx=8, pady=4)
@@ -342,6 +394,33 @@ class ImpactFitAdjuster:
                 variable=self.mode,
                 value=value,
             ).pack(side="left", padx=8)
+        
+        # Monoexp-only click modes. These are hidden in linear mode.
+        self.exp_mode_widgets = []
+        
+        self.exp_start_radio = ttk.Radiobutton(
+            mode_frame,
+            text="Exp start",
+            variable=self.mode,
+            value="exp_start",
+        )
+        
+        self.exp_end_radio = ttk.Radiobutton(
+            mode_frame,
+            text="Exp end",
+            variable=self.mode,
+            value="exp_end",
+        )
+        
+        self.exp_mode_widgets.extend(
+            [
+                self.exp_start_radio,
+                self.exp_end_radio,
+            ]
+        )
+        
+        for widget in self.exp_mode_widgets:
+            widget.pack_forget()
 
         status_frame = ttk.Frame(main_frame)
         status_frame.pack(side="top", fill="x", padx=8, pady=3)
@@ -447,7 +526,197 @@ class ImpactFitAdjuster:
         self.impacts_df.loc[idx, "review_delta_i_pA"] = delta
 
         return pre_fit, post_fit
+    
+    def _refit_monoexp_row(self, idx):
+        row = self.impacts_df.loc[idx]
 
+        exp_start_s = float(row["review_exp_start_s"])
+        exp_end_s = float(row["review_exp_end_s"])
+
+        lo = min(exp_start_s, exp_end_s)
+        hi = max(exp_start_s, exp_end_s)
+
+        mask = (
+            np.isfinite(self.time_s)
+            & np.isfinite(self.current_pa)
+            & (self.time_s >= lo)
+            & (self.time_s <= hi)
+        )
+
+        fit_t_abs_s = self.time_s[mask]
+        fit_current_pa = self.current_pa[mask]
+
+        if fit_t_abs_s.size < 10:
+            self.impacts_df.loc[idx, "review_exp_tau_s"] = np.nan
+            self.impacts_df.loc[idx, "review_exp_amplitude_pa"] = np.nan
+            self.impacts_df.loc[idx, "review_exp_i_inf_pa"] = np.nan
+            self.impacts_df.loc[idx, "review_exp_r_squared"] = np.nan
+            return None
+
+        fit_time_s = fit_t_abs_s - fit_t_abs_s[0]
+
+        i_inf_guess = pd.to_numeric(row.get("exp_i_inf_pa", np.nan), errors="coerce")
+        amp_guess = pd.to_numeric(row.get("exp_amplitude_pa", np.nan), errors="coerce")
+        tau_guess = pd.to_numeric(row.get("exp_tau_s", np.nan), errors="coerce")
+
+        if not np.isfinite(i_inf_guess):
+            tail_n = max(5, fit_current_pa.size // 5)
+            i_inf_guess = float(np.nanmedian(fit_current_pa[-tail_n:]))
+
+        if not np.isfinite(amp_guess):
+            amp_guess = float(fit_current_pa[0] - i_inf_guess)
+
+        if not np.isfinite(tau_guess) or tau_guess <= 0:
+            tau_guess = 1.0
+
+        try:
+            result = fit_monoexp_step(
+                time_s=fit_time_s,
+                current_pa=fit_current_pa,
+                current_inf_guess_pa=float(i_inf_guess),
+                amplitude_guess_pa=float(amp_guess),
+                tau_guess_s=float(tau_guess),
+            )
+        except Exception as exc:
+            print(f"Monoexp refit failed for row {idx}: {exc}")
+            self.impacts_df.loc[idx, "review_exp_tau_s"] = np.nan
+            self.impacts_df.loc[idx, "review_exp_amplitude_pa"] = np.nan
+            self.impacts_df.loc[idx, "review_exp_i_inf_pa"] = np.nan
+            self.impacts_df.loc[idx, "review_exp_r_squared"] = np.nan
+            return None
+
+        self.impacts_df.loc[idx, "review_exp_tau_s"] = result.tau_s
+        self.impacts_df.loc[idx, "review_exp_amplitude_pa"] = result.amplitude_pa
+        self.impacts_df.loc[idx, "review_exp_i_inf_pa"] = result.current_inf_pa
+        self.impacts_df.loc[idx, "review_exp_r_squared"] = result.r_squared
+
+        # These are the columns passed back to trace_reviewer.py and then
+        # into combined_results.xlsx -> monoexponential.
+        self.impacts_df.loc[idx, "exp_tau_s"] = result.tau_s
+        self.impacts_df.loc[idx, "exp_amplitude_pa"] = result.amplitude_pa
+        self.impacts_df.loc[idx, "exp_i_inf_pa"] = result.current_inf_pa
+        self.impacts_df.loc[idx, "exp_r_squared"] = result.r_squared
+
+        self.impacts_df.loc[idx, "monoexp_user_selected"] = True
+
+        return result
+    
+    def _get_current_fit_mode(self, idx):
+        if "fit_mode" not in self.impacts_df.columns:
+            return "linear"
+
+        try:
+            mode = str(self.impacts_df.loc[idx, "fit_mode"]).strip().lower()
+        except Exception:
+            return "linear"
+
+        if mode not in {"linear", "monoexp"}:
+            return "linear"
+
+        return mode
+
+    def _set_current_fit_mode(self, mode: str):
+        idx = self._get_row_index()
+
+        mode = str(mode).strip().lower()
+
+        if mode not in {"linear", "monoexp"}:
+            raise ValueError(f"Unknown fit mode: {mode}")
+
+        self.fit_mode.set(mode)
+        self.impacts_df.loc[idx, "fit_mode"] = mode
+
+        if mode == "monoexp":
+            self.impacts_df.loc[idx, "monoexp_user_selected"] = True
+
+            if "exp_amplitude_pa" in self.impacts_df.columns:
+                amplitude = pd.to_numeric(
+                    self.impacts_df.loc[idx, "exp_amplitude_pa"],
+                    errors="coerce",
+                )
+
+                if np.isfinite(amplitude):
+                    self.impacts_df.loc[idx, "monoexp_delta_i_pA"] = -float(amplitude)
+
+        if hasattr(self, "fit_mode_button"):
+            if mode == "monoexp":
+                self.fit_mode_button.config(text="Use linear")
+            else:
+                self.fit_mode_button.config(text="Use monoexp")
+
+        print(
+            f"DEBUG: impact {self.current_index + 1} "
+            f"fit_mode set to {mode}"
+        )
+    
+    def _sync_mode_widgets(self):
+        idx = self._get_row_index()
+        fit_mode = self._get_current_fit_mode(idx)
+    
+        if fit_mode == "monoexp":
+            for widget in self.exp_mode_widgets:
+                widget.pack(side="left", padx=8)
+        else:
+            for widget in self.exp_mode_widgets:
+                widget.pack_forget()
+    
+            if self.mode.get() in {"exp_start", "exp_end"}:
+                self.mode.set("pre_start")
+
+    def _sync_fit_mode_button(self):
+        if not hasattr(self, "fit_mode_button"):
+            return
+    
+        idx = self._get_row_index()
+        mode = self._get_current_fit_mode(idx)
+    
+        self.fit_mode.set(mode)
+    
+        if mode == "monoexp":
+            self.fit_mode_button.config(text="Use linear")
+        else:
+            self.fit_mode_button.config(text="Use monoexp")
+    
+        self._sync_mode_widgets()
+
+    def toggle_fit_mode(self):
+        idx = self._get_row_index()
+        current_mode = self._get_current_fit_mode(idx)
+    
+        if current_mode == "linear":
+            new_mode = "monoexp"
+        else:
+            new_mode = "linear"
+    
+        self._set_current_fit_mode(new_mode)
+    
+        if new_mode == "monoexp":
+            self.mode.set("exp_start")
+            self.impacts_df.loc[idx, "monoexp_user_selected"] = True
+        else:
+            self.mode.set("pre_start")
+    
+        self._sync_fit_mode_button()
+        self._draw_current_impact()
+        self.notify_parent_update()
+
+    def _has_valid_monoexp_fit(self, row):
+        values = [
+            row.get("exp_tau_s", np.nan),
+            row.get("exp_amplitude_pa", np.nan),
+            row.get("exp_i_inf_pa", np.nan),
+        ]
+    
+        values = [pd.to_numeric(v, errors="coerce") for v in values]
+    
+        tau_s, amplitude_pa, i_inf_pa = values
+    
+        return (
+            np.isfinite(tau_s)
+            and np.isfinite(amplitude_pa)
+            and np.isfinite(i_inf_pa)
+            and tau_s > 0
+        )
     # ------------------------------------------------------------
     # Plotting
     # ------------------------------------------------------------
@@ -504,29 +773,118 @@ class ImpactFitAdjuster:
             label="Post-fit points",
         )
 
-        # Red linear fits.
-        if np.isfinite(pre_fit["slope"]):
-            x_pre = np.linspace(pre_start, pre_end, 50)
-            y_pre = pre_fit["slope"] * x_pre + pre_fit["intercept"]
+        fit_mode = self._get_current_fit_mode(idx)
+        self.fit_mode.set(fit_mode)
+        self._sync_fit_mode_button()
+        fit_status_text = ""
 
-            self.ax.plot(
-                x_pre / 60.0,
-                y_pre,
-                color="red",
-                linewidth=3.0,
-                label="Linear fits",
+        monoexp_status_text = ""
+
+        if fit_mode == "monoexp":
+            exp_start_s = float(row["review_exp_start_s"])
+            exp_end_s = float(row["review_exp_end_s"])
+
+            result = self._refit_monoexp_row(idx)
+            row = self.impacts_df.loc[idx]
+
+            # Draw monoexp boundary lines.
+            self.ax.axvline(
+                exp_start_s / 60.0,
+                color="blue",
+                linestyle=":",
+                linewidth=1.8,
+                label="exp start",
             )
 
-        if np.isfinite(post_fit["slope"]):
-            x_post = np.linspace(post_start, post_end, 50)
-            y_post = post_fit["slope"] * x_post + post_fit["intercept"]
-
-            self.ax.plot(
-                x_post / 60.0,
-                y_post,
-                color="red",
-                linewidth=3.0,
+            self.ax.axvline(
+                exp_end_s / 60.0,
+                color="blue",
+                linestyle=":",
+                linewidth=1.8,
+                label="exp end",
             )
+
+            if result is not None:
+                lo = min(exp_start_s, exp_end_s)
+                hi = max(exp_start_s, exp_end_s)
+
+                mask_exp = (
+                    np.isfinite(self.time_s)
+                    & np.isfinite(self.current_pa)
+                    & (self.time_s >= lo)
+                    & (self.time_s <= hi)
+                )
+
+                plot_time_s = self.time_s[mask_exp]
+                plot_current_pa = self.current_pa[mask_exp]
+                fit_time_s = plot_time_s - plot_time_s[0]
+
+                tau_s = float(row["exp_tau_s"])
+                amp_pa = float(row["exp_amplitude_pa"])
+                i_inf_pa = float(row["exp_i_inf_pa"])
+
+                model_pa = i_inf_pa + amp_pa * np.exp(-fit_time_s / tau_s)
+
+                self.ax.scatter(
+                    plot_time_s / 60.0,
+                    plot_current_pa,
+                    s=14,
+                    color="cyan",
+                    alpha=0.8,
+                    label="Monoexp-fit points",
+                )
+
+                self.ax.plot(
+                    plot_time_s / 60.0,
+                    model_pa,
+                    color="blue",
+                    linewidth=3.0,
+                    label="Monoexp fit",
+                )
+
+                self.impacts_df.loc[idx, "monoexp_user_selected"] = True
+                self.impacts_df.loc[idx, "monoexp_delta_i_pA"] = -amp_pa
+
+                r2 = float(row["exp_r_squared"])
+
+                k_decay = 1.0 / tau_s if tau_s > 0 else np.nan
+
+                monoexp_status_text = (
+                    f"Monoexp fit | k_decay={k_decay:.4g} s⁻¹ | "
+                    f"tau={tau_s:.3g} s | R²={r2:.4f}"
+                    if np.isfinite(r2)
+                    else f"Monoexp fit | k_decay={k_decay:.4g} s⁻¹ | tau={tau_s:.3g} s"
+                )
+
+            else:
+                monoexp_status_text = (
+                    "Monoexp fit failed or window has too few points."
+                )
+
+        if fit_mode == "linear":
+            # Red linear fits.
+            if np.isfinite(pre_fit["slope"]):
+                x_pre = np.linspace(pre_start, pre_end, 50)
+                y_pre = pre_fit["slope"] * x_pre + pre_fit["intercept"]
+
+                self.ax.plot(
+                    x_pre / 60.0,
+                    y_pre,
+                    color="red",
+                    linewidth=3.0,
+                    label="Linear fits",
+                )
+
+            if np.isfinite(post_fit["slope"]):
+                x_post = np.linspace(post_start, post_end, 50)
+                y_post = post_fit["slope"] * x_post + post_fit["intercept"]
+
+                self.ax.plot(
+                    x_post / 60.0,
+                    y_post,
+                    color="red",
+                    linewidth=3.0,
+                )
 
         # Boundary lines.
         boundaries = [
@@ -563,10 +921,29 @@ class ImpactFitAdjuster:
         delta = self.impacts_df.loc[idx, "review_delta_i_pA"]
         keep = bool(self.impacts_df.loc[idx, "keep_for_stats"])
         status = self.impacts_df.loc[idx, "review_status"]
-
+        
+        if fit_mode == "monoexp":
+            tau_s = pd.to_numeric(
+                self.impacts_df.loc[idx, "exp_tau_s"],
+                errors="coerce",
+            )
+        
+            if np.isfinite(tau_s) and tau_s > 0:
+                decay_rate_constant_s_inv = 1.0 / float(tau_s)
+                fit_metric_text = (
+                    f"k_decay = {decay_rate_constant_s_inv:.4g} s⁻¹ "
+                    f"(tau = {tau_s:.3g} s)"
+                )
+            else:
+                fit_metric_text = "k_decay = n/a"
+        
+        else:
+            fit_metric_text = f"Δi_review = {delta:.2f} pA"
+        
         self.ax.set_title(
             f"Impact {self.current_index + 1} of {len(self.impacts_df)} | "
-            f"Δi_review = {delta:.2f} pA | keep={keep} | {status}"
+            f"{fit_metric_text} | keep={keep} | "
+            f"fit={fit_mode} | {status}"
         )
 
         self.ax.set_xlabel("Time (min)")
@@ -577,12 +954,18 @@ class ImpactFitAdjuster:
         self.fig.tight_layout()
         self.canvas.draw_idle()
 
-        self.status_var.set(
+        base_status = (
             "Click mode: "
             f"{self.mode.get()} | "
             "keys: 1 pre-start, 2 pre-end, 3 post-start, 4 post-end, "
-            "5 eval, A accept, R reject, N next, P previous, S save"
+            "5 eval, 6 exp-start, 7 exp-end, "
+            "A accept, R reject, N next, P previous, M mode, S save"
         )
+
+        if monoexp_status_text:
+            self.status_var.set(f"{monoexp_status_text} | {base_status}")
+        else:
+            self.status_var.set(base_status)
 
         self.fit_info_var.set(
             f"pre n={pre_fit['n']}, R²={pre_fit['r2']:.3f} | "
@@ -617,6 +1000,14 @@ class ImpactFitAdjuster:
 
         elif mode == "eval_time":
             self.impacts_df.loc[idx, "review_eval_time_s"] = clicked_s
+        
+        elif mode == "exp_start":
+            self.impacts_df.loc[idx, "review_exp_start_s"] = clicked_s
+            self.impacts_df.loc[idx, "monoexp_user_selected"] = True
+        
+        elif mode == "exp_end":
+            self.impacts_df.loc[idx, "review_exp_end_s"] = clicked_s
+            self.impacts_df.loc[idx, "monoexp_user_selected"] = True
 
         self.impacts_df.loc[idx, "review_status"] = "edited"
         self._draw_current_impact()
@@ -650,23 +1041,45 @@ class ImpactFitAdjuster:
         elif key == "s":
             self.save_reviewed_fits()
             return
+        elif key == "m":
+            self.toggle_fit_mode()
+            return
+        elif key == "6":
+            self.mode.set("exp_start")
+        elif key == "7":
+            self.mode.set("exp_end")
 
         self._draw_current_impact()
 
     def previous_impact(self):
         if self.current_index > 0:
             self.current_index -= 1
+            self._sync_fit_mode_button()
             self._draw_current_impact()
 
     def next_impact(self):
         if self.current_index < len(self.impacts_df) - 1:
             self.current_index += 1
+            self._sync_fit_mode_button()
             self._draw_current_impact()
 
     def accept_current_fit(self):
         idx = self._get_row_index()
-        self.impacts_df.loc[idx, "review_status"] = "accepted"
+        fit_mode = self._get_current_fit_mode(idx)
+
         self.impacts_df.loc[idx, "keep_for_stats"] = True
+
+        if fit_mode == "monoexp":
+            result = self._refit_monoexp_row(idx)
+
+            self.impacts_df.loc[idx, "review_status"] = (
+                "accepted_monoexp" if result is not None else "monoexp_failed"
+            )
+            self.impacts_df.loc[idx, "monoexp_user_selected"] = result is not None
+
+        else:
+            self.impacts_df.loc[idx, "review_status"] = "accepted"
+
         self._draw_current_impact()
         self.notify_parent_update()
 

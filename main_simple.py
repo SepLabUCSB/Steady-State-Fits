@@ -19,10 +19,17 @@ from modules.analysis import analyze_folder
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Simple nanoimpact pipeline with Tk interactive impact review. "
+            "Nanoimpact pipeline with Tk interactive impact review. "
             "This runs impact detection, plateau fitting, monoexponential correction, "
             "manual keep/remove review, and Excel export only."
         )
+    )
+    
+    parser.add_argument(
+        "--polarity",
+        choices=["negative", "positive", "both", "prompt"],
+        default="prompt",
+        help="Impact direction to analyze: negative, positive, both, or prompt.",
     )
 
     parser.add_argument(
@@ -62,6 +69,25 @@ def build_parser():
 
     return parser
 
+def resolve_impact_polarity(value: str) -> str:
+    value = str(value).strip().lower()
+
+    if value in {"negative", "positive", "both"}:
+        return value
+
+    print("\nChoose impact polarity to analyze:")
+    print("  1 = negative impacts")
+    print("  2 = positive impacts")
+    print("  3 = both")
+
+    choice = input("Enter 1, 2, or 3 [1]: ").strip()
+
+    if choice == "2":
+        return "positive"
+    if choice == "3":
+        return "both"
+
+    return "negative"
 
 def main():
     parser = build_parser()
@@ -71,7 +97,8 @@ def main():
         folder=args.folder,
         pattern=args.pattern,
     )
-
+    impact_polarity = resolve_impact_polarity(args.polarity)
+    
     analyze_folder(
         config=config,
         save_combined=True,
@@ -79,6 +106,7 @@ def main():
         save_per_file=not args.no_per_file,
         verbose=not args.quiet,
         review_interactive=True,
+        impact_polarity=impact_polarity,
     )
 
 
