@@ -41,5 +41,6 @@ def run_review_impacts_tk(folder: Path):
 
 if __name__ == "__main__":
     run_review_impacts_tk(
+        # Input filepath here
         Path(r"")
     )
