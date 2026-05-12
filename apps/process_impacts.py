@@ -13,12 +13,14 @@ from nanoimpact.analysis import analyze_folder
 
 def run_process_impacts():
     config = PipelineConfig(
+        # Input data filepath here
         folder=Path(r""),
         pattern="*.txt",
     )
 
     combined_df = analyze_folder(config)
 
+    # Input alternate excel file for output
     out_xlsx = config.folder / ".xlsx"
     combined_df.to_excel(out_xlsx, index=False)
 
