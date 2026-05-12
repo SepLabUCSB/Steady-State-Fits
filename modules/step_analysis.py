@@ -36,7 +36,7 @@ def extract_plateaus(
     Extract steady-state plateau currents between detected impact boundaries.
 
     Each plateau is estimated using a linear fit over the middle 40% of the
-    plateau region, matching your current workflow.
+    plateau region.
 
     Parameters
     ----------
