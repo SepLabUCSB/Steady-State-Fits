@@ -67,6 +67,12 @@ An interactive fit-adjustment window lets users review each detected impact, adj
 
 ![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/Fitting2.gif?raw=true)
 
+The user can also separately fit impacts using a monoexponential function with added baseline correction for accuracy. The user can manually define the exponential fitting window by selecting the `Exp start` and `Exp end` boundaries. 
+
+![App Screenshot](Fitting4.gif?raw=true)
+
+During fitting, the local post-impact baseline is estimated and subtracted from the trace, allowing the monoexponential model to capture the recovery behavior without being biased by slow baseline drift. The fitted baseline is then added back for visualization and export.
+
 ## Folder Structure
 <img src="https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/folder_list.png" alt="Folder structure" width="80%">
 
