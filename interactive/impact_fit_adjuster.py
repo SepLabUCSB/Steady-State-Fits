@@ -138,6 +138,14 @@ class ImpactFitAdjuster:
             "review_exp_amplitude_pa": np.nan,
             "review_exp_i_inf_pa": np.nan,
             "review_exp_r_squared": np.nan,
+            
+            "review_exp_i_inf_residual_pa": np.nan,
+            "review_exp_baseline_slope_pa_per_s": np.nan,
+            "review_exp_baseline_intercept_pa": np.nan,
+            
+            "exp_i_inf_residual_pa": np.nan,
+            "exp_baseline_slope_pa_per_s": np.nan,
+            "exp_baseline_intercept_pa": np.nan,
         }
 
         for col, default in defaults.items():
@@ -496,6 +504,30 @@ class ImpactFitAdjuster:
             "x": x,
             "y": y,
         }
+    
+    def _monoexp_baseline(self, idx, t_abs_s):
+        """
+        Baseline used for monoexp correction.
+    
+        For monoexp recovery, use the reviewed post-impact line because the
+        exponential should decay toward the post-impact drift baseline.
+        """
+        row = self.impacts_df.loc[idx]
+    
+        post_fit = self._fit_line(
+            float(row["review_post_start_s"]),
+            float(row["review_post_end_s"]),
+        )
+    
+        slope = post_fit["slope"]
+        intercept = post_fit["intercept"]
+    
+        # Fallback: no correction, preserves old behavior.
+        if not (np.isfinite(slope) and np.isfinite(intercept)):
+            return np.zeros_like(t_abs_s, dtype=float), 0.0, 0.0
+    
+        baseline_pa = slope * t_abs_s + intercept
+        return baseline_pa, float(slope), float(intercept)
 
     def _refit_row(self, idx):
         row = self.impacts_df.loc[idx]
@@ -555,24 +587,35 @@ class ImpactFitAdjuster:
 
         fit_time_s = fit_t_abs_s - fit_t_abs_s[0]
 
-        i_inf_guess = pd.to_numeric(row.get("exp_i_inf_pa", np.nan), errors="coerce")
+        # Baseline-correct before monoexp fitting.
+        baseline_pa, baseline_slope, baseline_intercept = self._monoexp_baseline(
+            idx,
+            fit_t_abs_s,
+        )
+        fit_current_bc_pa = fit_current_pa - baseline_pa
+        
+        # Guesses should now be in baseline-corrected coordinates.
+        i_inf_guess = pd.to_numeric(
+            row.get("exp_i_inf_residual_pa", np.nan),
+            errors="coerce",
+        )
         amp_guess = pd.to_numeric(row.get("exp_amplitude_pa", np.nan), errors="coerce")
         tau_guess = pd.to_numeric(row.get("exp_tau_s", np.nan), errors="coerce")
-
+        
         if not np.isfinite(i_inf_guess):
-            tail_n = max(5, fit_current_pa.size // 5)
-            i_inf_guess = float(np.nanmedian(fit_current_pa[-tail_n:]))
-
+            tail_n = max(5, fit_current_bc_pa.size // 5)
+            i_inf_guess = float(np.nanmedian(fit_current_bc_pa[-tail_n:]))
+        
         if not np.isfinite(amp_guess):
-            amp_guess = float(fit_current_pa[0] - i_inf_guess)
-
+            amp_guess = float(fit_current_bc_pa[0] - i_inf_guess)
+        
         if not np.isfinite(tau_guess) or tau_guess <= 0:
             tau_guess = 1.0
-
+        
         try:
             result = fit_monoexp_step(
                 time_s=fit_time_s,
-                current_pa=fit_current_pa,
+                current_pa=fit_current_bc_pa,
                 current_inf_guess_pa=float(i_inf_guess),
                 amplitude_guess_pa=float(amp_guess),
                 tau_guess_s=float(tau_guess),
@@ -582,23 +625,37 @@ class ImpactFitAdjuster:
             self.impacts_df.loc[idx, "review_exp_tau_s"] = np.nan
             self.impacts_df.loc[idx, "review_exp_amplitude_pa"] = np.nan
             self.impacts_df.loc[idx, "review_exp_i_inf_pa"] = np.nan
+            self.impacts_df.loc[idx, "review_exp_i_inf_residual_pa"] = np.nan
             self.impacts_df.loc[idx, "review_exp_r_squared"] = np.nan
             return None
 
+        # Residual asymptote from the baseline-corrected fit.
+        i_inf_residual_pa = float(result.current_inf_pa)
+        
+        # Absolute i_inf for compatibility/export.
+        # Use exp_end as the reference point.
+        i_inf_abs_end_pa = float(baseline_pa[-1] + i_inf_residual_pa)
+        
         self.impacts_df.loc[idx, "review_exp_tau_s"] = result.tau_s
         self.impacts_df.loc[idx, "review_exp_amplitude_pa"] = result.amplitude_pa
-        self.impacts_df.loc[idx, "review_exp_i_inf_pa"] = result.current_inf_pa
+        self.impacts_df.loc[idx, "review_exp_i_inf_pa"] = i_inf_abs_end_pa
+        self.impacts_df.loc[idx, "review_exp_i_inf_residual_pa"] = i_inf_residual_pa
         self.impacts_df.loc[idx, "review_exp_r_squared"] = result.r_squared
-
+        self.impacts_df.loc[idx, "review_exp_baseline_slope_pa_per_s"] = baseline_slope
+        self.impacts_df.loc[idx, "review_exp_baseline_intercept_pa"] = baseline_intercept
+        
         # These are the columns passed back to trace_reviewer.py and then
         # into combined_results.xlsx -> monoexponential.
         self.impacts_df.loc[idx, "exp_tau_s"] = result.tau_s
         self.impacts_df.loc[idx, "exp_amplitude_pa"] = result.amplitude_pa
-        self.impacts_df.loc[idx, "exp_i_inf_pa"] = result.current_inf_pa
+        self.impacts_df.loc[idx, "exp_i_inf_pa"] = i_inf_abs_end_pa
+        self.impacts_df.loc[idx, "exp_i_inf_residual_pa"] = i_inf_residual_pa
         self.impacts_df.loc[idx, "exp_r_squared"] = result.r_squared
-
+        self.impacts_df.loc[idx, "exp_baseline_slope_pa_per_s"] = baseline_slope
+        self.impacts_df.loc[idx, "exp_baseline_intercept_pa"] = baseline_intercept
+        
         self.impacts_df.loc[idx, "monoexp_user_selected"] = True
-
+        
         return result
     
     def _get_current_fit_mode(self, idx):
@@ -821,9 +878,24 @@ class ImpactFitAdjuster:
 
                 tau_s = float(row["exp_tau_s"])
                 amp_pa = float(row["exp_amplitude_pa"])
-                i_inf_pa = float(row["exp_i_inf_pa"])
+                i_inf_residual_pa = float(row["exp_i_inf_residual_pa"])
 
-                model_pa = i_inf_pa + amp_pa * np.exp(-fit_time_s / tau_s)
+                baseline_pa, _, _ = self._monoexp_baseline(idx, plot_time_s)
+                
+                model_pa = (
+                    baseline_pa
+                    + i_inf_residual_pa
+                    + amp_pa * np.exp(-fit_time_s / tau_s)
+                )
+                
+                self.ax.plot(
+                    plot_time_s / 60.0,
+                    baseline_pa + i_inf_residual_pa,
+                    color="gray",
+                    linestyle="--",
+                    linewidth=2.0,
+                    label="Monoexp baseline + i_inf",
+                )
 
                 self.ax.scatter(
                     plot_time_s / 60.0,
@@ -1133,6 +1205,9 @@ class ImpactFitAdjuster:
         # Refit all rows before saving.
         for idx in self.impacts_df.index:
             self._refit_row(idx)
+        
+            if self._get_current_fit_mode(idx) == "monoexp":
+                self._refit_monoexp_row(idx)
             
         self._update_final_delta_columns()
     
