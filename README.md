@@ -73,6 +73,10 @@ The user can also separately fit impacts using a monoexponential function with a
 
 During fitting, the local post-impact baseline is estimated and subtracted from the trace, allowing the monoexponential model to capture the recovery behavior without being biased by slow baseline drift. The fitted baseline is then added back for visualization and export.
 
+In the trace view, users can open a standalone FFT notch-filtering window to inspect the frequency spectrum of the current trace, identify dominant periodic noise peaks, and apply custom notch-filter frequencies. The window also allows users to reset back to the default notch-filter settings defined in the configuration file.
+
+![App Screenshot](https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/FFT.gif?raw=true)
+
 ## Folder Structure
 <img src="https://github.com/SepLabUCSB/Steady-State-Fits/blob/trunk/docs/folder_list.png" alt="Folder structure" width="80%">
 
