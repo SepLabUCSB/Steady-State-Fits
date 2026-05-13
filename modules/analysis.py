@@ -89,7 +89,7 @@ def _save_combined_workbook_safely(
 
 def _autosave_combined_rows(rows, monoexp_rows, out_xlsx: Path, verbose: bool = True):
     """
-    Save combined rows in real time after each Tk-reviewed file.
+    Live-save combined rows after each Tk-reviewed file.
 
     This overwrites combined_results.xlsx with all rows processed so far.
     That avoids duplicate appends while still protecting progress during
@@ -295,6 +295,9 @@ def _run_interactive_review(
         drift_slope_pa_per_min=drift_slope_pa_per_min,
         drift_intercept_pa=drift_intercept_pa,
         out_png=path.with_name(path.stem + "_trace.png"),
+        notch_freqs_hz=tuple(config.filter.notch_freqs_hz),
+        notch_q=config.filter.notch_q,
+        charging_cutoff_min=config.detection.charging_cutoff_min,
     )
 
     return review_trace(payload)

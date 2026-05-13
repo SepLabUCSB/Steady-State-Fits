@@ -16,6 +16,8 @@ from matplotlib.widgets import Button
 
 from interactive.tk_backend import show_blocking_safely, tk_style_context
 from interactive.impact_fit_adjuster import open_impact_fit_adjuster
+from modules.filters import notch_filter
+from interactive.notch_frequency_popup import NotchFrequencyPopup
 
 
 @dataclass
@@ -40,6 +42,9 @@ class ReviewTracePayload:
     drift_slope_pa_per_min: float
     drift_intercept_pa: float
     out_png: Path | None = None
+    notch_freqs_hz: tuple[float, ...] = ()
+    notch_q: float = 30.0
+    charging_cutoff_min: float = 0.0
     
 @dataclass
 class ReviewTraceResult:
@@ -228,6 +233,14 @@ def review_trace(payload: ReviewTracePayload):
         show_filtered = False
         reviewed_impacts_df_cache = None
         current_fit_overlay_mode = None
+        
+        notch_popup_refs = []
+        notch_state = {
+            "freqs_hz": tuple(payload.notch_freqs_hz),
+            "q": float(payload.notch_q),
+            "source": "default",
+        }
+        
         facecolors = scatter_mid.get_facecolors()
         edgecolors = scatter_mid.get_edgecolors()
 
@@ -442,6 +455,72 @@ def review_trace(payload: ReviewTracePayload):
             
             # Keep a reference so the Tk callbacks/window do not get orphaned.
             fit_adjuster_apps.append(app)
+            
+        def apply_notch_to_parent_trace(freqs_hz, q, source):
+            nonlocal current_filtered_pa, show_filtered
+        
+            freqs_hz = tuple(float(f) for f in freqs_hz)
+            q = float(q)
+        
+            new_filtered_pa = current_raw_pa.copy()
+            mask_after_charging = time_min > payload.charging_cutoff_min
+        
+            if len(freqs_hz) > 0:
+                new_filtered_pa[mask_after_charging] = notch_filter(
+                    current_pa=current_raw_pa[mask_after_charging],
+                    sample_freq_hz=1.0 / payload.dt_s,
+                    freqs_hz=freqs_hz,
+                    q=q,
+                )
+        
+            current_filtered_pa = new_filtered_pa
+            line_filtered.set_ydata(current_filtered_pa)
+        
+            # Force parent trace to show the updated filtered trace.
+            show_filtered = True
+            line_raw.set_visible(False)
+            line_filtered.set_visible(True)
+        
+            notch_state["freqs_hz"] = freqs_hz
+            notch_state["q"] = q
+            notch_state["source"] = source
+        
+            ax.relim()
+            ax.autoscale_view()
+            fig.canvas.draw_idle()
+        
+            print(
+                f"    Applied {source} notch frequencies: "
+                f"{list(freqs_hz)} with Q={q:g}"
+            )
+    
+    
+        def on_open_notch_popup(event):
+            try:
+                parent_window = fig.canvas.manager.window
+            except Exception:
+                parent_window = None
+        
+            popup = NotchFrequencyPopup(
+                parent_window=parent_window,
+                time_s=time_s,
+                time_min=time_min,
+                current_raw_pa=current_raw_pa,
+                sample_freq_hz=1.0 / payload.dt_s,
+            
+                # True config defaults for the Reset button.
+                default_freqs_hz=payload.notch_freqs_hz,
+                default_q=payload.notch_q,
+            
+                # Current active values for reopening the popup.
+                initial_freqs_hz=notch_state["freqs_hz"],
+                initial_q=notch_state["q"],
+            
+                charging_cutoff_min=payload.charging_cutoff_min,
+                on_apply=apply_notch_to_parent_trace,
+            )
+
+            notch_popup_refs.append(popup)
 
         def clear_overlays():
             nonlocal overlay_artists
@@ -853,6 +932,11 @@ def review_trace(payload: ReviewTracePayload):
         ax_clear_fits = fig.add_axes([0.86, 0.20, 0.12, 0.10])
         button_clear_fits = Button(ax_clear_fits, "Clear fits")
         button_clear_fits.on_clicked(lambda event: clear_fit_overlays(clear_mode=True))
+        
+        # Main control buttons: original bottom row plus FFT notch
+        ax_notch = fig.add_axes([0.86, 0.62, 0.12, 0.10])
+        button_notch = Button(ax_notch, "FFT notch")
+        button_notch.on_clicked(on_open_notch_popup)
 
         # Main control buttons: original bottom row
         ax_fit_adjuster = fig.add_axes([0.56, 0.06, 0.14, 0.10])
@@ -897,6 +981,7 @@ def review_trace(payload: ReviewTracePayload):
                 ax_next.set_visible(False)
                 ax_toggle.set_visible(False)
                 ax_fit_adjuster.set_visible(False)
+                ax_notch.set_visible(False)
                 ax_show_linear.set_visible(False)
                 ax_show_monoexp.set_visible(False)
                 ax_clear_fits.set_visible(False)
@@ -906,6 +991,7 @@ def review_trace(payload: ReviewTracePayload):
                 ax_next.set_visible(True)
                 ax_toggle.set_visible(True)
                 ax_fit_adjuster.set_visible(True)
+                ax_notch.set_visible(True)
                 ax_show_linear.set_visible(True)
                 ax_show_monoexp.set_visible(True)
                 ax_clear_fits.set_visible(True)
